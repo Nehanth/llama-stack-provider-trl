@@ -374,22 +374,126 @@ class DPOTrainingSingleDevice:
         device: torch.device,
         provider_config: TrlPostTrainingConfig,
     ) -> AutoModelForCausalLM:
-        """Load model for DPO training."""
+        """
+        Load model for DPO training with automatic MoE detection and configuration.
+        
+        This method implements the official TRL documentation recommendations for MoE models:
+        - Automatically detects MoE models (Granite, Mixtral, etc.)
+        - Enables router logits output for auxiliary loss computation
+        - Configures router auxiliary loss coefficient
+        - Applies MoE-specific training optimizations
+        """
         logger.info("Loading model for DPO training")
         try:
+            # Load model configuration first to check for MoE architecture
             model_config = AutoConfig.from_pretrained(model, **provider_config.model_specific_config)
+            
+            # === MoE DETECTION AND CONFIGURATION ===
+            # Based on TRL documentation: https://huggingface.co/docs/trl/dpo_trainer
+            is_moe_model = False
+            num_experts = 0
+            experts_per_token = 0
+            
+            # Detect MoE models by checking for expert-related configuration attributes
+            moe_indicators = [
+                'num_local_experts',      # Mixtral, Granite
+                'num_experts',            # Alternative naming
+                'num_experts_per_tok',    # Some models use this
+                'expert_capacity',        # Expert capacity configurations
+                'moe_num_experts',        # Some implementations
+            ]
+            
+            for indicator in moe_indicators:
+                if hasattr(model_config, indicator):
+                    expert_count = getattr(model_config, indicator, 0)
+                    if expert_count and expert_count > 1:
+                        is_moe_model = True
+                        num_experts = expert_count
+                        logger.info(f"Detected MoE model with {num_experts} experts")
+                        break
+            
+            # Check for experts per token (how many experts are activated per token)
+            if hasattr(model_config, 'num_experts_per_tok'):
+                experts_per_token = getattr(model_config, 'num_experts_per_tok', 2)
+            elif hasattr(model_config, 'top_k'):
+                experts_per_token = getattr(model_config, 'top_k', 2)
+            else:
+                experts_per_token = 2  # Default for most MoE models
+            
+            # === APPLY MOE CONFIGURATION ===
+            if is_moe_model and provider_config.auto_detect_moe:
+                logger.info("Applying MoE configuration for detected MoE model")
+                
+                # CRITICAL: Enable router logits output for auxiliary loss
+                # This is REQUIRED per TRL documentation for MoE models
+                if provider_config.output_router_logits:
+                    logger.info("Enabling router logits output for auxiliary loss")
+                    model_config.output_router_logits = True
+                    
+                # Set router auxiliary loss coefficient
+                # This controls load balancing between experts
+                if provider_config.router_aux_loss_coef > 0:
+                    logger.info(f"Set router auxiliary loss coefficient: {provider_config.router_aux_loss_coef}")
+                    model_config.router_aux_loss_coef = provider_config.router_aux_loss_coef
+                
+                # Apply expert dropout if configured
+                if hasattr(provider_config, 'expert_dropout') and provider_config.expert_dropout > 0:
+                    if hasattr(model_config, 'expert_dropout'):
+                        model_config.expert_dropout = provider_config.expert_dropout
+                        logger.info(f"Set expert dropout: {provider_config.expert_dropout}")
+                
+                # Log MoE configuration details
+                logger.info("MoE Configuration:")
+                logger.info(f"  - Number of experts: {num_experts}")
+                logger.info(f"  - Experts per token: {experts_per_token}")
+                logger.info(f"  - Router logits enabled: {getattr(model_config, 'output_router_logits', False)}")
+                logger.info(f"  - Router aux loss coef: {getattr(model_config, 'router_aux_loss_coef', 0.0)}")
+                
+            elif is_moe_model and not provider_config.auto_detect_moe:
+                logger.warning(
+                    f"MoE model detected ({num_experts} experts) but auto_detect_moe=False. "
+                    "You may need to manually configure MoE settings for optimal training."
+                )
+            elif not is_moe_model:
+                logger.info("Standard (non-MoE) model detected, using regular DPO configuration")
+            
+            # === LOAD MODEL WITH CONFIGURATION ===
+            logger.info(f"Loading model with {'MoE' if is_moe_model else 'standard'} configuration")
             
             model_obj = AutoModelForCausalLM.from_pretrained(
                 model,
-                torch_dtype="auto" if device.type != "cpu" else "float32",
+                torch_dtype="auto" if device.type != "cpu" else torch.float32,
                 quantization_config=None,  # No quantization for DPO training
-                config=model_config,
+                config=model_config,       # Use our configured model config
                 **provider_config.model_specific_config,
             )
             
+            # Move model to device
             model_obj = model_obj.to(device)
-            logger.info(f"Model loaded and moved to device: {model_obj.device}")
+            logger.info(f"Model loaded and moved to device: {device}")
+            
+            # === VALIDATE MOE CONFIGURATION ===
+            if is_moe_model and provider_config.auto_detect_moe:
+                # Verify that router logits are properly enabled
+                router_enabled = getattr(model_obj.config, 'output_router_logits', False)
+                aux_loss_coef = getattr(model_obj.config, 'router_aux_loss_coef', 0.0)
+                
+                if not router_enabled:
+                    logger.warning(
+                        "Router logits not enabled! MoE training may fail. "
+                        "Check model compatibility with router logits."
+                    )
+                
+                if aux_loss_coef <= 0:
+                    logger.warning(
+                        "Router auxiliary loss coefficient is 0! "
+                        "MoE load balancing will not be applied."
+                    )
+                
+                logger.info("✅ MoE model configuration validated successfully")
+            
             return model_obj
+            
         except Exception as e:
             raise RuntimeError(f"Failed to load model: {str(e)}") from e
 

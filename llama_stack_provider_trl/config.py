@@ -14,6 +14,7 @@ Configuration controls every aspect of DPO (Direct Preference Optimization) trai
 - How models are saved (checkpoint format)
 - Training hyperparameters (learning rates, batch sizes, etc.)
 - DPO-specific settings (beta parameter, loss type, etc.)
+- MoE-specific settings (router logits, auxiliary loss, etc.)
 
 The configuration is used to create a TrlPostTrainingConfig object that gets
 passed to the training logic to control how DPO training works.
@@ -35,6 +36,7 @@ class TrlPostTrainingConfig(BaseModel):
     - Model settings (checkpointing, sequence length)
     - Training hyperparameters (learning rate, batch size, etc.)
     - DPO-specific parameters (beta, loss type, reference model)
+    - MoE-specific parameters (router logits, auxiliary loss)
     
     All parameters have sensible defaults, so you only need to specify
     the ones you want to change from the defaults.
@@ -157,6 +159,57 @@ class TrlPostTrainingConfig(BaseModel):
     # - Higher values: More smoothing (rarely needed)
     label_smoothing: float = 0.0
 
+    # === MIXTURE OF EXPERTS (MOE) CONFIGURATION ===
+    # These settings are specific to MoE models like Granite, Mixtral, etc.
+    # Based on official TRL documentation: https://huggingface.co/docs/trl/dpo_trainer
+
+    # Enable router logits output for auxiliary loss computation
+    # CRITICAL: Must be True for MoE models to train properly
+    # This enables the load balancer auxiliary loss from the router
+    # Without this, MoE models will have severe weight mapping issues
+    # - True: Enable router logits (REQUIRED for MoE models)
+    # - False: Disable router logits (only for non-MoE models)
+    output_router_logits: bool = True
+
+    # Router auxiliary loss coefficient 
+    # Controls how much the auxiliary loss contributes to the total loss
+    # Higher values = stronger load balancing between experts
+    # Lower values = weaker load balancing
+    # TRL documentation default: 0.001 (recommended starting point)
+    # - Typical range: 0.0001 to 0.01
+    # - 0.001: Standard value (works well for most MoE models)
+    # - 0.0: Disable auxiliary loss (not recommended for MoE)
+    router_aux_loss_coef: float = 0.001
+
+    # Load balancing strategy for MoE training
+    # Controls how the router distributes tokens across experts
+    # - "switch": Switch Transformer load balancing (recommended)
+    # - "gshard": GShard load balancing algorithm
+    # - "expert_choice": Expert Choice routing strategy
+    # - None: No explicit load balancing (not recommended)
+    moe_load_balancing: Literal["switch", "gshard", "expert_choice"] | None = "switch"
+
+    # Enable MoE-specific training optimizations
+    # Activates specialized optimizations for MoE model training
+    # Includes expert parallelism, gradient synchronization, etc.
+    # - True: Enable MoE optimizations (recommended for MoE models)
+    # - False: Use standard training (only for non-MoE models)
+    enable_moe_optimizations: bool = True
+
+    # Automatic MoE detection and configuration
+    # When True, automatically detects MoE models and applies MoE settings
+    # When False, uses MoE settings only when explicitly configured
+    # - True: Auto-detect and configure MoE models (recommended)
+    # - False: Manual MoE configuration only
+    auto_detect_moe: bool = True
+
+    # Expert dropout rate for MoE models during training
+    # Randomly drops experts during training to improve generalization
+    # - 0.0: No expert dropout (standard)
+    # - 0.1: Light expert dropout (can help with overfitting)
+    # - Higher values: More aggressive dropout (rarely needed)
+    expert_dropout: float = 0.0
+
     @classmethod
     def sample_run_config(cls, __distro_dir__: str, **kwargs: Any) -> dict[str, Any]:
         """
@@ -164,6 +217,7 @@ class TrlPostTrainingConfig(BaseModel):
         
         This method returns a basic configuration that should work for most
         testing scenarios. It uses safe defaults that work on most systems.
+        For MoE models like Granite, this includes proper MoE settings.
         
         Args:
             __distro_dir__: Directory for the distribution (not used currently)
@@ -173,9 +227,15 @@ class TrlPostTrainingConfig(BaseModel):
             Dictionary containing sample configuration values
         """
         return {
-            "checkpoint_format": "huggingface",  # Use HuggingFace format (most compatible)
-            "distributed_backend": None,        # Single device only
-            "device": "cpu",                    # Use CPU (works everywhere)
-            "dpo_beta": 0.1,                   # Standard DPO beta value
-            "use_reference_model": True        # Use reference model for stability
+            "checkpoint_format": "huggingface",     # Use HuggingFace format (most compatible)
+            "distributed_backend": None,           # Single device only
+            "device": "cpu",                       # Use CPU (works everywhere)
+            "dpo_beta": 0.1,                      # Standard DPO beta value
+            "use_reference_model": True,          # Use reference model for stability
+            # MoE-specific settings for models like Granite
+            "output_router_logits": True,         # Enable router logits (CRITICAL for MoE)
+            "router_aux_loss_coef": 0.001,       # Standard auxiliary loss coefficient
+            "moe_load_balancing": "switch",       # Switch Transformer load balancing
+            "enable_moe_optimizations": True,     # Enable MoE training optimizations
+            "auto_detect_moe": True,              # Auto-detect MoE models
         } 
