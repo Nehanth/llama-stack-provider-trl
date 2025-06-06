@@ -23,6 +23,10 @@ It works by:
 This implementation supports single-device training (CPU, single GPU, or MPS).
 """
 
+# ============================================================================
+# IMPORTS AND ENVIRONMENT SETUP
+# ============================================================================
+
 # Standard library imports
 import asyncio
 import gc
@@ -71,6 +75,9 @@ from ..config import TrlPostTrainingConfig
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# UTILITY FUNCTIONS - Memory monitoring and device setup
+# ============================================================================
 
 def get_gb(to_convert: int) -> str:
     """Convert memory values from bytes to gigabytes."""
@@ -78,7 +85,12 @@ def get_gb(to_convert: int) -> str:
 
 
 def get_memory_stats(device: torch.device) -> dict[str, Any]:
-    """Get comprehensive memory statistics for monitoring DPO training."""
+    """
+    MEMORY MONITORING - Get comprehensive memory statistics for monitoring DPO training.
+    
+    This function tracks memory usage across different device types to help monitor
+    training efficiency and detect memory issues.
+    """
     stats = {
         "system_memory": {
             "total": get_gb(psutil.virtual_memory().total),
@@ -111,7 +123,12 @@ def get_memory_stats(device: torch.device) -> dict[str, Any]:
 
 
 def setup_torch_device(device_str: str) -> torch.device:
-    """Initialize and validate PyTorch device for single-node DPO training."""
+    """
+    DEVICE SETUP - Initialize and validate PyTorch device for single-node DPO training.
+    
+    This function enforces Llama Stack's single-node training requirement and 
+    sets up the appropriate device (CPU, CUDA, or MPS).
+    """
     # Ensure single-node training only (Llama Stack requirement)
     if "WORLD_SIZE" in os.environ and int(os.environ.get("WORLD_SIZE", "1")) > 1:
         raise RuntimeError(
@@ -153,6 +170,9 @@ def setup_torch_device(device_str: str) -> torch.device:
 
     return device
 
+# ============================================================================
+# DPO TRAINING RECIPE CLASS - Main implementation
+# ============================================================================
 
 class DPOTrainingSingleDevice:
     """
@@ -192,9 +212,13 @@ class DPOTrainingSingleDevice:
         self.datasetio_api = datasetio_api
         self.datasets_api = datasets_api
 
+    # ============================================================================
+    # DATASET VALIDATION - Ensure preference data has required DPO fields
+    # ============================================================================
+
     def validate_preference_dataset(self, rows: list[dict]) -> bool:
         """
-        Validate that the dataset has the required fields for DPO training.
+        DATASET VALIDATION - Validate that the dataset has the required fields for DPO training.
         
         DPO requires exactly three fields per example:
         - prompt: The input question or instruction
@@ -228,11 +252,15 @@ class DPOTrainingSingleDevice:
         logger.info(f"DPO dataset validation passed: {len(rows)} preference examples")
         return True
 
+    # ============================================================================
+    # DATASET CREATION - Convert raw data to HuggingFace Dataset format
+    # ============================================================================
+
     def create_dpo_dataset(
         self, rows: list[dict], config: TrainingConfig, provider_config: TrlPostTrainingConfig
     ) -> Dataset:
         """
-        Create HuggingFace Dataset from preference data for DPO training.
+        DATASET CREATION - Create HuggingFace Dataset from preference data for DPO training.
         
         Following the TRL DPO pattern, the dataset should contain raw text fields
         that DPOTrainer will tokenize internally during training.
@@ -252,14 +280,18 @@ class DPOTrainingSingleDevice:
         logger.info(f"Created DPO dataset with {len(dpo_examples)} preference pairs")
         return Dataset.from_list(dpo_examples)
 
+    # ============================================================================
+    # DATASET PREPROCESSING - Format data for DPO training
+    # ============================================================================
+
     def preprocess_dpo_dataset(
         self, ds: Dataset, tokenizer: AutoTokenizer, provider_config: TrlPostTrainingConfig
     ) -> Dataset:
         """
-        Preprocess dataset for DPO training.
+        DATASET PREPROCESSING - Preprocess dataset for DPO training.
         
         DPOTrainer expects raw text that it will tokenize internally, so we only
-        apply basic formatting here.
+        apply basic formatting here using the chat template.
         """
         def format_for_dpo(examples):
             """Apply chat template formatting if available."""
@@ -297,8 +329,16 @@ class DPOTrainingSingleDevice:
         logger.info(f"Preprocessed {len(formatted_ds)} examples for DPO training")
         return formatted_ds
 
+    # ============================================================================
+    # DATASET LOADING - Load preference data from Llama Stack
+    # ============================================================================
+
     async def load_preference_data(self, dataset_id: str) -> list[dict[str, Any]]:
-        """Load preference dataset from Llama Stack dataset provider."""
+        """
+        DATASET LOADING - Load preference dataset from Llama Stack dataset provider.
+        
+        This connects to the datasetio API to retrieve the preference training data.
+        """
         try:
             all_rows = await self.datasetio_api.iterrows(dataset_id=dataset_id, limit=-1)
             if not isinstance(all_rows.data, list):
@@ -314,7 +354,7 @@ class DPOTrainingSingleDevice:
         provider_config: TrlPostTrainingConfig,
     ) -> tuple[Dataset, Dataset, AutoTokenizer]:
         """
-        Load and prepare preference dataset for DPO training.
+        COMPLETE DATASET PIPELINE - Load and prepare preference dataset for DPO training.
         
         Following TRL DPO patterns:
         1. Load preference data (prompt/chosen/rejected)
@@ -368,13 +408,22 @@ class DPOTrainingSingleDevice:
 
         return train_dataset, eval_dataset, tokenizer
 
+    # ============================================================================
+    # MODEL LOADING - Load and configure model for DPO training
+    # ============================================================================
+
     def load_model(
         self,
         model: str,
         device: torch.device,
         provider_config: TrlPostTrainingConfig,
     ) -> AutoModelForCausalLM:
-        """Load model for DPO training."""
+        """
+        MODEL LOADING - Load model for DPO training.
+        
+        This loads the base model that will be trained with DPO. For DPO, we typically
+        load the model without quantization to maintain training precision.
+        """
         logger.info("Loading model for DPO training")
         try:
             model_config = AutoConfig.from_pretrained(model, **provider_config.model_specific_config)
@@ -393,6 +442,10 @@ class DPOTrainingSingleDevice:
         except Exception as e:
             raise RuntimeError(f"Failed to load model: {str(e)}") from e
 
+    # ============================================================================
+    # DPO CONFIGURATION - Set up training parameters for single-device DPO
+    # ============================================================================
+
     def setup_dpo_config(
         self,
         config: TrainingConfig,
@@ -402,7 +455,12 @@ class DPOTrainingSingleDevice:
         output_dir_path: Path | None,
         steps_per_epoch: int,
     ) -> DPOConfig:
-        """Setup DPO training configuration for single-node training."""
+        """
+        DPO CONFIGURATION - Setup DPO training configuration for single-node training.
+        
+        This creates the TRL DPOConfig that controls all aspects of DPO training,
+        including learning rates, batch sizes, and DPO-specific parameters.
+        """
         logger.info("Configuring DPO training arguments for single-node setup")
         
         # Enforce single-node training
@@ -499,6 +557,10 @@ class DPOTrainingSingleDevice:
             label_smoothing=0.0,
         )
 
+    # ============================================================================
+    # MAIN TRAINING PIPELINE - Execute complete DPO training process
+    # ============================================================================
+
     async def train(
         self,
         model: str,
@@ -509,10 +571,17 @@ class DPOTrainingSingleDevice:
         provider_config: TrlPostTrainingConfig,
     ) -> tuple[dict[str, Any], list[Checkpoint]]:
         """
-        Execute single-node DPO training.
+        MAIN TRAINING PIPELINE - Execute single-node DPO training.
         
         This method enforces single-node training as required by Llama Stack
-        and executes the complete DPO training pipeline.
+        and executes the complete DPO training pipeline:
+        
+        1. Setup device and memory tracking
+        2. Load and preprocess preference dataset  
+        3. Load model and reference model
+        4. Configure DPO trainer
+        5. Execute DPO training
+        6. Save checkpoints and cleanup
         """
         # Enforce single-node training
         logger.info("Starting single-node DPO training (Llama Stack requirement)")
@@ -616,8 +685,16 @@ class DPOTrainingSingleDevice:
             gc.collect()
             memory_stats["final"] = get_memory_stats(device)
 
+    # ============================================================================
+    # CLEANUP UTILITIES - Memory management and resource cleanup
+    # ============================================================================
+
     def _cleanup_model(self, model: AutoModelForCausalLM, device_type: str) -> None:
-        """Clean up model from device memory."""
+        """
+        CLEANUP UTILITIES - Clean up model from device memory.
+        
+        This ensures proper memory cleanup after training completes.
+        """
         if device_type == "cuda":
             torch.cuda.empty_cache()
         # MPS and CPU cleanup handled by garbage collection 

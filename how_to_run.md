@@ -237,7 +237,7 @@ curl -X POST http://localhost:8321/v1/post-training/preference-optimize \
     "training_config": {
       "n_epochs": 1,
       "max_steps_per_epoch": 10,
-      "learning_rate": 1e-6,
+      "learning_rate": 1e-4,
       "data_config": {
         "dataset_id": "test-dpo-dataset-inline",
         "batch_size": 2,
