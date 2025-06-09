@@ -124,6 +124,10 @@ class TrlPostTrainingImpl:
         """
         await self._scheduler.shutdown()
 
+    # ============================================================================
+    # UTILITY METHODS - Helper functions for artifact management
+    # ============================================================================
+    
     @staticmethod
     def _checkpoint_to_artifact(checkpoint: Checkpoint) -> JobArtifact:
         """
@@ -166,6 +170,10 @@ class TrlPostTrainingImpl:
             name=TrainingArtifactType.RESOURCES_STATS.value,  # Standard name for stats
             metadata=resources_stats,                         # Store stats in metadata
         )
+
+    # ============================================================================
+    # SUPERVISED FINE-TUNING API - Not implemented (raises NotImplementedError)
+    # ============================================================================
 
     async def supervised_fine_tune(
         self,
@@ -213,6 +221,10 @@ class TrlPostTrainingImpl:
             "(like HuggingFace) for supervised fine-tuning."
         )
 
+    # ============================================================================
+    # DPO TRAINING API - Main API for starting preference optimization training
+    # ============================================================================
+
     async def preference_optimize(
         self,
         job_uuid: str,                               # Unique ID for this training job
@@ -225,7 +237,7 @@ class TrlPostTrainingImpl:
         checkpoint_dir: str | None = None,          # Directory to save checkpoints
     ) -> PostTrainingJob:
         """
-        Start a DPO (Direct Preference Optimization) training job.
+        DPO TRAINING API - Start a DPO (Direct Preference Optimization) training job.
         
         This is the main entry point for DPO training. It sets up an asynchronous
         training job that will run in a separate process, allowing the API to
@@ -310,9 +322,13 @@ class TrlPostTrainingImpl:
         # Return a PostTrainingJob object for the client to track progress
         return PostTrainingJob(job_uuid=job_uuid)
 
+    # ============================================================================
+    # LIST JOBS API - Get all training jobs managed by this provider
+    # ============================================================================
+
     async def get_training_jobs(self) -> ListPostTrainingJobsResponse:
         """
-        Get a list of all training jobs managed by this provider.
+        LIST JOBS API - Get a list of all training jobs managed by this provider.
         
         This method returns information about all training jobs that have been
         scheduled through this provider instance, regardless of their current status
@@ -325,6 +341,10 @@ class TrlPostTrainingImpl:
             # Convert each scheduler job to a PostTrainingJob
             data=[PostTrainingJob(job_uuid=job.id) for job in self._scheduler.get_jobs()]
         )
+
+    # ============================================================================
+    # HELPER METHODS - For extracting specific artifact types from jobs
+    # ============================================================================
 
     @staticmethod
     def _get_artifacts_metadata_by_type(job, artifact_type):
@@ -370,10 +390,14 @@ class TrlPostTrainingImpl:
         data = cls._get_artifacts_metadata_by_type(job, TrainingArtifactType.RESOURCES_STATS.value)
         return data[0] if data else None
 
+    # ============================================================================
+    # JOB STATUS API - Get current status of a specific training job
+    # ============================================================================
+
     @webmethod(route="/post-training/job/status")
     async def get_training_job_status(self, job_uuid: str) -> PostTrainingJobStatusResponse | None:
         """
-        Get the current status of a training job.
+        JOB STATUS API - Get the current status of a training job.
         
         This method provides real-time information about a training job,
         including its current status, timing information, checkpoints,
@@ -415,10 +439,14 @@ class TrlPostTrainingImpl:
             resources_allocated=self._get_resources_allocated(job),  # Resource usage stats
         )
 
+    # ============================================================================
+    # CANCEL JOB API - Cancel a running or scheduled training job
+    # ============================================================================
+
     @webmethod(route="/post-training/job/cancel")
     async def cancel_training_job(self, job_uuid: str) -> None:
         """
-        Cancel a running or scheduled training job.
+        CANCEL JOB API - Cancel a running or scheduled training job.
         
         This method attempts to cancel a training job. If the job is still
         scheduled, it will be removed from the queue. If it's currently running,
@@ -429,10 +457,14 @@ class TrlPostTrainingImpl:
         """
         self._scheduler.cancel(job_uuid)
 
+    # ============================================================================
+    # JOB ARTIFACTS API - Get artifacts/checkpoints produced by a training job
+    # ============================================================================
+
     @webmethod(route="/post-training/job/artifacts")
     async def get_training_job_artifacts(self, job_uuid: str) -> PostTrainingJobArtifactsResponse | None:
         """
-        Get artifacts produced by a training job.
+        JOB ARTIFACTS API - Get artifacts produced by a training job.
         
         Artifacts include model checkpoints saved during or after training.
         This method is useful for retrieving the final trained model or
