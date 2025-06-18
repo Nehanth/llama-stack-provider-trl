@@ -1,0 +1,15 @@
+module: llama_stack_provider_trl_remote
+config_class: llama_stack_provider_trl_remote.config.TrlRemoteFSDPConfig
+pip_packages:
+  - trl==0.18.1
+  - transformers==4.52.4
+  - datasets
+  - torch
+  - psutil
+  - accelerate
+api_dependencies:
+  - datasetio
+  - datasets
+optional_api_dependencies: []
+# Remote provider doesn't need a data validator since it communicates via HTTP
+provider_data_validator: null 
