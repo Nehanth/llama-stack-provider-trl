@@ -51,8 +51,8 @@ llama-stack-provider-trl/
 │   ├── post_training.py                # Main provider implementation
 │   └── recipes/
 │       └── dpo_training_single_device.py  # Core DPO training logic
-├── how_to_use/                         # Documentation and examples
-│   └──how_to_use.ipynb               # Interactive usage examples
+├── examples/                         # Documentation and examples
+│   └──examples.ipynb               # Interactive usage examples
 ├── providers.d/                        # Provider registration
 │   └── inline/post_training/trl.yaml   # Provider specification
 ├── pyproject.toml                      # Package configuration
