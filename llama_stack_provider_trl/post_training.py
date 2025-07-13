@@ -215,14 +215,12 @@ class TrlPostTrainingImpl:
 
     async def preference_optimize(
         self,
-        job_uuid: str,                               
-        model: str,                                  
-        finetuned_model: str,                       
-        algorithm_config: DPOAlignmentConfig,       
-        training_config: TrainingConfig,            
-        hyperparam_search_config: dict[str, Any],   
-        logger_config: dict[str, Any],              
-        checkpoint_dir: str | None = None,          
+        job_uuid: str,
+        finetuned_model: str,
+        algorithm_config: DPOAlignmentConfig,
+        training_config: TrainingConfig,
+        hyperparam_search_config: dict[str, Any],
+        logger_config: dict[str, Any],
     ) -> PostTrainingJob:
         """
         Start a DPO (Direct Preference Optimization) training job.
@@ -240,8 +238,7 @@ class TrlPostTrainingImpl:
         
         Args:
             job_uuid: Unique identifier for this training job
-            model: Base model to train (HuggingFace model identifier like "distilgpt2")
-            finetuned_model: Name for the output/fine-tuned model (used for saving)
+            finetuned_model: Base model to train (HuggingFace model identifier like "distilgpt2")
             algorithm_config: DPOAlignmentConfig containing DPO-specific settings
                             like reward scaling, clipping, etc.
             training_config: TrainingConfig containing general training settings
@@ -249,8 +246,6 @@ class TrlPostTrainingImpl:
             hyperparam_search_config: Configuration for hyperparameter search
                                     (not fully implemented yet)
             logger_config: Configuration for training logging and monitoring
-            checkpoint_dir: Directory where model checkpoints should be saved
-                          (if None, a default directory will be created)
                           
         Returns:
             PostTrainingJob: Job object containing the job UUID for status tracking
@@ -279,11 +274,15 @@ class TrlPostTrainingImpl:
                 datasets_api=self.datasets_api,    
             )
 
+            # Create default output directory for this job
+            # This ensures we always save checkpoints and can track artifacts
+            default_output_dir = f"./checkpoints/{job_uuid}"
+            
             # Run the actual DPO training
             # This is where the main training work happens
             resources_allocated, checkpoints = await recipe.train(
-                model=model,                        
-                output_dir=checkpoint_dir,          
+                model=finetuned_model,              
+                output_dir=default_output_dir,      
                 job_uuid=job_uuid,                  
                 dpo_config=algorithm_config,        
                 config=training_config,             
