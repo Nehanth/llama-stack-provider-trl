@@ -347,10 +347,35 @@ class DPOTrainingSingleDevice:
 
         # Split for training and evaluation
         logger.info("Splitting dataset for DPO training")
-        train_val_split = ds.train_test_split(test_size=0.1, seed=42)
+        
+        # Extract data configuration parameters
+        train_split_percentage = 0.9  # Default train split
+        shuffle = True  # Default shuffle
+        
+        if config.data_config:
+            # Try to get train_split_percentage from data_config
+            train_split_value = getattr(config.data_config, 'train_split_percentage', None)
+            if train_split_value is not None:
+                train_split_percentage = train_split_value
+                logger.info(f"Using data_config train_split_percentage: {train_split_percentage}")
+            
+            # Try to get shuffle from data_config
+            shuffle_value = getattr(config.data_config, 'shuffle', None)
+            if shuffle_value is not None:
+                shuffle = shuffle_value
+                logger.info(f"Using data_config shuffle: {shuffle}")
+        
+        # Calculate test size from train split percentage
+        test_size = 1.0 - train_split_percentage
+        
+        train_val_split = ds.train_test_split(
+            test_size=test_size, 
+            seed=42 if shuffle else None,
+            shuffle=shuffle
+        )
         train_dataset = train_val_split["train"]
         eval_dataset = train_val_split["test"]
-        logger.info(f"Split: {len(train_dataset)} train, {len(eval_dataset)} eval examples")
+        logger.info(f"Split: {len(train_dataset)} train ({train_split_percentage:.1%}), {len(eval_dataset)} eval ({test_size:.1%}) examples")
 
         return train_dataset, eval_dataset, tokenizer
 
@@ -398,11 +423,60 @@ class DPOTrainingSingleDevice:
                 "Llama Stack only supports single-node training."
             )
         
-        # DPO typically uses lower learning rates than standard fine-tuning
-        lr = 1e-4
+        # Extract DPO algorithm parameters from algorithm_config or fall back to provider_config
+        dpo_beta = provider_config.dpo_beta  # Default from provider config
+        dpo_loss_type = provider_config.dpo_loss_type  # Default from provider config
+        
+        # Override with algorithm_config if provided
+        if dpo_config:
+            # Try to get beta from algorithm_config
+            beta_value = getattr(dpo_config, 'beta', None)
+            if beta_value is not None:
+                dpo_beta = beta_value
+                logger.info(f"Using algorithm_config beta: {dpo_beta}")
+            
+            # Try to get loss_type from algorithm_config
+            loss_type_value = getattr(dpo_config, 'loss_type', None)
+            if loss_type_value is not None:
+                dpo_loss_type = loss_type_value
+                logger.info(f"Using algorithm_config loss_type: {dpo_loss_type}")
+        
+        # Extract optimizer parameters from training_config or use defaults
+        lr = 1e-4  # Default learning rate for DPO
+        warmup_ratio = 0.1  # Default warmup ratio
+        optimizer_type = "adamw_torch"  # Default optimizer for TRL
+        weight_decay = 0.01  # Default weight decay
+        
         if config.optimizer_config:
-            lr = config.optimizer_config.lr
-            logger.info(f"Using custom learning rate: {lr}")
+            if hasattr(config.optimizer_config, 'lr') and config.optimizer_config.lr is not None:
+                lr = config.optimizer_config.lr
+                logger.info(f"Using optimizer_config learning rate: {lr}")
+            
+            # Try to get warmup_ratio from optimizer_config
+            warmup_ratio_value = getattr(config.optimizer_config, 'warmup_ratio', None)
+            if warmup_ratio_value is not None:
+                warmup_ratio = warmup_ratio_value
+                logger.info(f"Using optimizer_config warmup_ratio: {warmup_ratio}")
+            
+            # Try to get optimizer_type from optimizer_config
+            optimizer_type_value = getattr(config.optimizer_config, 'optimizer_type', None)
+            if optimizer_type_value is not None:
+                # Map API optimizer names to TRL optimizer names
+                optimizer_mapping = {
+                    "adamw": "adamw_torch",
+                    "adam": "adam",
+                    "sgd": "sgd",
+                    "adamw_torch": "adamw_torch",
+                    "adamw_hf": "adamw_hf",
+                }
+                optimizer_type = optimizer_mapping.get(optimizer_type_value, "adamw_torch")
+                logger.info(f"Using optimizer_config optimizer_type: {optimizer_type_value} -> {optimizer_type}")
+            
+            # Try to get weight_decay from optimizer_config
+            weight_decay_value = getattr(config.optimizer_config, 'weight_decay', None)
+            if weight_decay_value is not None:
+                weight_decay = weight_decay_value
+                logger.info(f"Using optimizer_config weight_decay: {weight_decay}")
 
         if not config.data_config:
             raise ValueError("DataConfig is required for DPO training")
@@ -420,8 +494,12 @@ class DPOTrainingSingleDevice:
         logger.info(f"- Steps per epoch: {steps_per_epoch}")
         logger.info(f"- Total steps: {total_steps}")
         logger.info(f"- Max steps: {max_steps}")
-        logger.info(f"- DPO beta: {provider_config.dpo_beta}")
+        logger.info(f"- DPO beta: {dpo_beta}")
+        logger.info(f"- DPO loss type: {dpo_loss_type}")
         logger.info(f"- Learning rate: {lr}")
+        logger.info(f"- Warmup ratio: {warmup_ratio}")
+        logger.info(f"- Optimizer: {optimizer_type}")
+        logger.info(f"- Weight decay: {weight_decay}")
 
         save_strategy = "steps" if output_dir_path else "no"
 
@@ -448,7 +526,7 @@ class DPOTrainingSingleDevice:
             
             # Checkpointing
             save_strategy=save_strategy,
-            save_steps=save_steps if save_strategy == "steps" else None,
+            save_steps=float(save_steps) if save_strategy == "steps" and save_steps is not None else 500.0,
             load_best_model_at_end=True if output_dir_path else False,
             metric_for_best_model="eval_loss",
             greater_is_better=False,
@@ -465,9 +543,10 @@ class DPOTrainingSingleDevice:
             remove_unused_columns=False,
             
             # Optimizer settings
+            optim=optimizer_type,
             learning_rate=lr,
-            warmup_ratio=0.1,
-            weight_decay=0.01,
+            warmup_ratio=warmup_ratio,
+            weight_decay=weight_decay,
             
             # Single-node data loading settings
             dataloader_pin_memory=device.type == "cuda",
@@ -480,8 +559,8 @@ class DPOTrainingSingleDevice:
             local_rank=-1,  # No distributed training
             
             # DPO algorithm parameters
-            beta=provider_config.dpo_beta,
-            loss_type=provider_config.dpo_loss_type,
+            beta=dpo_beta,
+            loss_type=dpo_loss_type,
             label_smoothing=0.0,
         )
 
@@ -563,7 +642,7 @@ class DPOTrainingSingleDevice:
             memory_stats["after_training"] = get_memory_stats(device)
 
             # Save final DPO model
-            checkpoints = None
+            checkpoints = []
             if output_dir_path:
                 logger.info("Saving final DPO model")
                 save_path = output_dir_path / "dpo_model"
@@ -590,9 +669,9 @@ class DPOTrainingSingleDevice:
             # Cleanup
             logger.info("Cleaning up single-node DPO training resources")
             if 'trainer' in locals() and hasattr(trainer, "model"):
-                self._cleanup_model(trainer.model, device.type)
+                self._cleanup_model(device.type)
             if 'ref_model' in locals() and ref_model:
-                self._cleanup_model(ref_model, device.type)
+                self._cleanup_model(device.type)
             if 'trainer' in locals():
                 del trainer
             if 'model_obj' in locals():
@@ -602,7 +681,7 @@ class DPOTrainingSingleDevice:
             gc.collect()
             memory_stats["final"] = get_memory_stats(device)
 
-    def _cleanup_model(self, model: AutoModelForCausalLM, device_type: str) -> None:
+    def _cleanup_model(self, device_type: str) -> None:
         """Clean up model from device memory."""
         if device_type == "cuda":
             torch.cuda.empty_cache()
