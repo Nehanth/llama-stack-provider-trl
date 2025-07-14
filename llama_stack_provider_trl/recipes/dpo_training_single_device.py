@@ -423,23 +423,13 @@ class DPOTrainingSingleDevice:
                 "Llama Stack only supports single-node training."
             )
         
-        # Extract DPO algorithm parameters from algorithm_config or fall back to provider_config
-        dpo_beta = provider_config.dpo_beta  # Default from provider config
-        dpo_loss_type = provider_config.dpo_loss_type  # Default from provider config
+        # Use DPO algorithm parameters from provider_config as fallback
+        # (Extra fields from API requests are not accessible due to Pydantic schema limitations)
+        dpo_beta = provider_config.dpo_beta  # Fallback: use provider config
+        dpo_loss_type = provider_config.dpo_loss_type  # Fallback: use provider config
         
-        # Override with algorithm_config if provided
-        if dpo_config:
-            # Try to get beta from algorithm_config
-            beta_value = getattr(dpo_config, 'beta', None)
-            if beta_value is not None:
-                dpo_beta = beta_value
-                logger.info(f"Using algorithm_config beta: {dpo_beta}")
-            
-            # Try to get loss_type from algorithm_config
-            loss_type_value = getattr(dpo_config, 'loss_type', None)
-            if loss_type_value is not None:
-                dpo_loss_type = loss_type_value
-                logger.info(f"Using algorithm_config loss_type: {dpo_loss_type}")
+        logger.info(f"Using DPO beta (fallback): {dpo_beta}")
+        logger.info(f"Using DPO loss_type (fallback): {dpo_loss_type}")
         
         # Extract optimizer parameters from training_config or use defaults
         lr = 1e-4  # Default learning rate for DPO

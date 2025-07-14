@@ -10,6 +10,7 @@ providers:
     config:
       device: "cuda"
       dpo_beta: 0.1
+      dpo_loss_type: "sigmoid"
       use_reference_model: true
       max_seq_length: 2048
       gradient_checkpointing: false
